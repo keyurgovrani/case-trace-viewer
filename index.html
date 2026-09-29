@@ -73,8 +73,25 @@ input[type=text],input[type=search],select{font:inherit;color:var(--ink);backgro
 /* turn pane collapses to a thin rail that keeps only the expand button and a vertical label */
 /* The turns column animates its width. The list keeps its full width and fades out, so its text never rewraps
    mid-slide, and a separate rail fades in on top. */
-#traceView{--turns-width:300px;grid-template-columns:var(--turns-width) minmax(420px,1fr) minmax(480px,1.35fr);transition:grid-template-columns .22s var(--ease)}
-#traceView.turns-collapsed{grid-template-columns:36px minmax(420px,1fr) minmax(480px,1.35fr)}
+#traceView{--turns-width:300px;--tree-col:minmax(420px,1fr);grid-template-columns:var(--turns-width) var(--tree-col) minmax(480px,1.35fr);transition:grid-template-columns .22s var(--ease)}
+#traceView.turns-collapsed{grid-template-columns:36px var(--tree-col) minmax(480px,1.35fr)}
+/* drag handles sit on a pane's edge; the 6px hit area straddles the border line */
+.tree-pane,.pane.det{position:relative}
+.splitter{position:absolute;z-index:5;touch-action:none;background:none}
+.splitter::after{content:"";position:absolute;background:transparent;transition:background .12s}
+.splitter:hover::after,.splitter:focus-visible::after,.splitter.dragging::after{background:var(--accent)}
+.splitter:focus-visible{outline:none}
+.splitter.col{top:0;bottom:0;width:7px;right:-4px;cursor:col-resize}
+.splitter.col::after{top:0;bottom:0;left:2px;width:3px}
+.splitter.row{left:0;right:0;height:7px;top:-4px;cursor:row-resize}
+.splitter.row::after{left:0;right:0;top:2px;height:3px}
+.turns-pane>.splitter.col{right:0}
+#splitRows{display:none}
+.turns-collapsed #splitTurns{display:none}
+/* while dragging, the grid follows the pointer directly and text never gets selected */
+#traceView.resizing{transition:none;user-select:none}
+#traceView.resizing.cols,#traceView.resizing.cols *{cursor:col-resize!important}
+#traceView.resizing.rows,#traceView.resizing.rows *{cursor:row-resize!important}
 .turns-pane{position:relative;overflow:hidden}
 .turns-full{display:flex;flex-direction:column;min-height:0;height:100%;min-width:var(--turns-width);transition:opacity .16s ease}
 .turns-pane .pane-head{flex-wrap:nowrap}
@@ -252,8 +269,8 @@ pre.text{white-space:pre-wrap;font-family:var(--sans);font-size:13px}
 .cmsg details.raw{margin-top:6px}
 .cmsg details.raw summary{cursor:pointer;color:var(--muted);font-size:12px}
 
-@media (max-width:1100px){.body{grid-template-columns:260px 1fr;grid-template-rows:1fr 1fr}#traceView{--turns-width:260px;grid-template-columns:var(--turns-width) 1fr}#traceView.turns-collapsed{grid-template-columns:36px 1fr}.pane.det{grid-column:1 / -1;border-top:1px solid var(--line)}}
-@media (max-width:760px){.body{display:flex;flex-direction:column;overflow:auto}#traceView.turns-collapsed .turns-pane{max-height:42px}.turns-full{min-width:0}.turns-rail{width:auto;right:0;bottom:auto;height:42px;flex-direction:row;padding:0 14px}.turns-rail .label{writing-mode:horizontal-tb;transform:none}.top{flex-wrap:wrap}.pane{flex:none;max-height:60vh;border-right:0;border-bottom:1px solid var(--line)}.top{padding:8px 16px}.stats{margin-left:0}.tl-head,.row{grid-template-columns:1fr 60px 70px 56px}}
+@media (max-width:1100px){.body{grid-template-columns:260px 1fr;grid-template-rows:1fr 1fr}#traceView{--turns-width:260px;grid-template-columns:var(--turns-width) 1fr;grid-template-rows:var(--top-row,1fr) minmax(160px,1fr)}#traceView.turns-collapsed{grid-template-columns:36px 1fr}#splitTree{display:none}#splitRows{display:block}.pane.det{grid-column:1 / -1;border-top:1px solid var(--line)}}
+@media (max-width:760px){.body{display:flex;flex-direction:column;overflow:auto}.splitter,#splitRows{display:none}#traceView.turns-collapsed .turns-pane{max-height:42px}.turns-full{min-width:0}.turns-rail{width:auto;right:0;bottom:auto;height:42px;flex-direction:row;padding:0 14px}.turns-rail .label{writing-mode:horizontal-tb;transform:none}.top{flex-wrap:wrap}.pane{flex:none;max-height:60vh;border-right:0;border-bottom:1px solid var(--line)}.top{padding:8px 16px}.stats{margin-left:0}.tl-head,.row{grid-template-columns:1fr 60px 70px 56px}}
 @media (prefers-reduced-motion:no-preference){.row,.turn{transition:background .12s}}
 @media (prefers-reduced-motion:reduce){#traceView,.turns-pane,.turns-full,.turns-rail,.row .caret,.sec-h::before,.jt-toggle{transition:none!important}}
 </style>
@@ -320,9 +337,11 @@ pre.text{white-space:pre-wrap;font-family:var(--sans);font-size:13px}
       <div class="pane-head"><span class="label" id="turnsLabel" tabindex="0" data-tip="One turn per user message. Each card shows the turn's latency, input and output tokens, cached tokens, cost and span count.">Turns</span><button type="button" class="icon-btn" id="turnsToggle" aria-expanded="true" aria-controls="turnList" aria-label="Collapse turns panel" data-tip="Collapse the turns panel."><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button></div>
       <div class="pane-body" id="turnList"></div>
       </div>
+      <div class="splitter col" id="splitTurns" role="separator" aria-orientation="vertical" aria-label="Resize turns panel" tabindex="0" data-tip="Drag to resize. Double-click to reset."></div>
       <button type="button" class="turns-rail" id="turnsRail" aria-label="Expand turns panel" data-tip="Expand the turns panel." inert><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg><span class="label" id="turnsRailLabel">Turns</span></button>
     </aside>
-    <section class="pane">
+    <section class="pane tree-pane">
+      <div class="splitter col" id="splitTree" role="separator" aria-orientation="vertical" aria-label="Resize timeline panel" tabindex="0" data-tip="Drag to resize. Double-click to reset."></div>
       <div class="tstats" id="turnStats"></div>
       <div class="pane-head">
         <input type="search" id="filterText" placeholder="Filter by name, tool, id, lane&#x2026;" style="flex:1;min-width:160px">
@@ -341,6 +360,7 @@ pre.text{white-space:pre-wrap;font-family:var(--sans);font-size:13px}
       </div>
     </section>
     <section class="pane det">
+      <div class="splitter row" id="splitRows" role="separator" aria-orientation="horizontal" aria-label="Resize details panel" tabindex="0" data-tip="Drag to resize. Double-click to reset."></div>
       <div class="pane-body" id="details"><div class="empty">Select a step to see its input, output, tokens and cost.</div></div>
     </section>
   </div>
@@ -924,6 +944,60 @@ function setTurnsCollapsed(collapsed) {
   if (hadFocus) (collapsed ? $('#turnsRail') : $('#turnsToggle')).focus();
   try { localStorage.setItem(TURNS_KEY, collapsed ? '1' : '0'); } catch {}
 }
+// ---------- panel sizes ----------
+// Each splitter owns one size variable on #traceView. Unset means the stylesheet default (fluid columns).
+// Bounds keep every pane usable: the turns list, the timeline and the details never drop below a readable width.
+const SIZES_KEY = 'ctv-panel-sizes';
+const panelSizes = (() => { try { return JSON.parse(localStorage.getItem(SIZES_KEY)) || {}; } catch { return {}; } })();
+const SPLITTERS = {
+  splitTurns: { size: 'turns', variable: '--turns-width', axis: 'x', format: (px) => `${px}px`, edge: () => $('#traceView').getBoundingClientRect().left, bounds: (view) => [180, Math.min(560, view.width - 420 - 480)] },
+  splitTree: { size: 'tree', variable: '--tree-col', axis: 'x', format: (px) => `minmax(320px, ${px}px)`, edge: () => $('.tree-pane').getBoundingClientRect().left, bounds: (view) => [320, view.width - $('#turnsPane').offsetWidth - 480] },
+  splitRows: { size: 'top', variable: '--top-row', axis: 'y', format: (px) => `${px}px`, edge: () => $('#traceView').getBoundingClientRect().top, bounds: (view) => [160, view.height - 160] },
+};
+const clampSize = ({ config, px }) => { const [low, high] = config.bounds($('#traceView').getBoundingClientRect()); return Math.round(_.clamp(px, low, Math.max(low, high))); };
+function applyPanelSizes() {
+  const view = $('#traceView');
+  _.forEach(SPLITTERS, (config) => {
+    const px = panelSizes[config.size];
+    if (_.isFinite(px)) view.style.setProperty(config.variable, config.format(px)); else view.style.removeProperty(config.variable);
+  });
+}
+function setPanelSize({ config, px }) {
+  if (px === undefined) delete panelSizes[config.size]; else panelSizes[config.size] = clampSize({ config, px });
+  applyPanelSizes();
+  try { localStorage.setItem(SIZES_KEY, JSON.stringify(panelSizes)); } catch {}
+}
+// the size a splitter starts from is the pane's current rendered size, so a first drag never jumps
+const currentSize = (id) => (id === 'splitTurns' ? $('#turnsPane').offsetWidth : id === 'splitTree' ? $('.tree-pane').offsetWidth : $('.tree-pane').offsetHeight);
+function wireSplitter(id) {
+  const handle = $(`#${id}`); const config = SPLITTERS[id];
+  handle.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    handle.setPointerCapture(event.pointerId);
+    handle.classList.add('dragging');
+    $('#traceView').classList.add('resizing', config.axis === 'x' ? 'cols' : 'rows');
+    const pointer = (pointerEvent) => (config.axis === 'x' ? pointerEvent.clientX : pointerEvent.clientY) - config.edge();
+    // keep the spot you grabbed under the pointer, so the edge never jumps to the cursor on the first move
+    const grab = currentSize(id) - pointer(event);
+    const move = (moveEvent) => setPanelSize({ config, px: pointer(moveEvent) + grab });
+    const end = () => {
+      handle.classList.remove('dragging');
+      $('#traceView').classList.remove('resizing', 'cols', 'rows');
+      handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', end); handle.removeEventListener('pointercancel', end);
+    };
+    handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', end); handle.addEventListener('pointercancel', end);
+  });
+  handle.addEventListener('dblclick', () => setPanelSize({ config, px: undefined }));
+  handle.addEventListener('keydown', (event) => {
+    const step = event.shiftKey ? 64 : 16;
+    const delta = { ArrowLeft: -step, ArrowRight: step, ArrowUp: -step, ArrowDown: step }[event.key];
+    if (!delta || (config.axis === 'x') !== ['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+    event.preventDefault();
+    setPanelSize({ config, px: (panelSizes[config.size] ?? currentSize(id)) + delta });
+  });
+}
+
 const savedTurnsCollapsed = () => { try { return localStorage.getItem(TURNS_KEY) === '1'; } catch { return false; } };
 
 function editorLanguage(value) {
@@ -1011,7 +1085,9 @@ function llmSections(span) {
   const input = span.input;
   if (_.isPlainObject(input)) {
     if (input.systemPrompt) out.push(['in-system', 'Input \u00b7 system prompt', input.systemPrompt, true]);
-    if (input.message !== undefined) out.push(['in-message', typeof input.message === 'string' ? 'Input \u00b7 message' : 'Input \u00b7 messages', input.message, typeof input.message === 'string']);
+    // newest first: the last message is the one the model was answering, so it leads; the raw span record keeps the original order
+    if (Array.isArray(input.message)) out.push(['in-message', `Input \u00b7 ${input.message.length} messages, newest first`, _.reverse([...input.message]), false]);
+    else if (input.message !== undefined) out.push(['in-message', 'Input \u00b7 message', input.message, typeof input.message === 'string']);
     const rest = _.omit(input, ['systemPrompt', 'message']);
     if (!_.isEmpty(rest)) out.push(['in-rest', 'Input \u00b7 other parameters', rest, false]);
   } else if (input !== undefined) out.push(['in-raw', 'Input', input, false]);
@@ -1360,6 +1436,8 @@ applyTheme(savedTheme());
 $('#turnsToggle').addEventListener('click', () => setTurnsCollapsed(true));
 $('#turnsRail').addEventListener('click', () => setTurnsCollapsed(false));
 setTurnsCollapsed(savedTurnsCollapsed());
+_.forEach(_.keys(SPLITTERS), wireSplitter);
+applyPanelSizes();
 $('#convList').addEventListener('click', (event) => {
   const button = event.target.closest('[data-unfold]'); if (!button) return;
   const body = button.previousElementSibling;

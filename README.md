@@ -17,7 +17,8 @@ The file is parsed in the browser. Nothing is uploaded.
 - **Trace timeline**: Query, Agent Execution, then every step with a duration bar, latency and cost. Steps group by sub-agent lane. Tool calls carry no task id in the platform trace, so the viewer pairs each tool span with the model call whose `tool_calls` name and arguments match, and takes the lane from there.
 - **Step details**: start, latency, tokens, cache, cost, model or tool, lane. Input and output blocks open in a read-only Monaco editor (folding, sticky headers, Cmd+F find), as a foldable tree, or raw. Prose blocks (system prompt, response text) open as rendered markdown.
 - **Query row**: the user message and the agent's final reply.
-- **Layout and theme**: the turns panel collapses to a thin rail, and a System / Light / Dark switch sits in the header. The code editor's colors follow the page theme. The browser remembers both choices.
+- **Layout and theme**: drag the edges between panels to resize them (arrow keys work on a focused edge, double-click resets). The turns panel collapses to a thin rail, and a System / Light / Dark switch sits in the header. The code editor's colors follow the page theme. The browser remembers sizes, collapse and theme.
+- **Model call inputs** list messages newest first, so the message the model was answering leads. The raw span record keeps the original order.
 - **Conversation**: user and agent messages, dispatches to sub-agents, sub-agent results, platform context rows and thoughts, rendered as markdown with lane and kind filters.
 
 ## Convert an export
