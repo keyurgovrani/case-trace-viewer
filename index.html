@@ -447,7 +447,62 @@ const kindOf = (type) => (type === 'LLM' ? 'LLM' : type === 'Tool' ? 'Tool' : /a
 
 // tool spans carry no task id: each tool call runs as its own execution. The link that exists is the model's
 // tool_calls (name + arguments) on the LLM span that asked for it, so lanes for tools are inferred from that.
-const canonical = (value) => { let parsed = value; if (typeof value === 'string') { try { parsed = JSON.parse(value); } catch { return value; } } return JSON.stringify(sortKeys(parsed)); };
+// tool span input is a Python repr ({'a': True}) while tool_calls arguments are JSON, so both are parsed to values first.
+const canonical = (value) => { let parsed = value; if (typeof value === 'string') { try { parsed = JSON.parse(value); } catch { parsed = parsePyLiteral(value); if (parsed === undefined) return value; } } return JSON.stringify(sortKeys(parsed)); };
+// Parses a Python literal (dict, list, tuple, str, number, True/False/None) into a JS value; undefined when it is not one.
+// Hand-rolled cursor parser: inputs can run to megabytes of workflow code, so no per-token slicing.
+function parsePyLiteral(text) {
+  let pos = 0;
+  const fail = () => { throw new SyntaxError(`not a python literal at ${pos}`); };
+  const skipSpace = () => { while (pos < text.length && /\s/.test(text[pos])) pos += 1; };
+  const ESCAPES = { n: '\n', t: '\t', r: '\r', b: '\b', f: '\f', 0: '\0', '\\': '\\', "'": "'", '"': '"' };
+  const HEX_WIDTH = { x: 2, u: 4, U: 8 };
+  const WORD = /True|False|None|-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/y;
+  const KEYWORDS = { True: true, False: false, None: null };
+  const readString = () => {
+    const quote = text[pos]; pos += 1;
+    const parts = [];
+    let runStart = pos;
+    while (pos < text.length && text[pos] !== quote) {
+      if (text[pos] !== '\\') { pos += 1; continue; }
+      parts.push(text.slice(runStart, pos));
+      const code = text[pos + 1];
+      if (HEX_WIDTH[code]) { parts.push(String.fromCodePoint(parseInt(text.slice(pos + 2, pos + 2 + HEX_WIDTH[code]), 16))); pos += 2 + HEX_WIDTH[code]; }
+      else if (code in ESCAPES) { parts.push(ESCAPES[code]); pos += 2; }
+      else { parts.push(`\\${code}`); pos += 2; } // python keeps an unknown escape as written
+      runStart = pos;
+    }
+    if (text[pos] !== quote) fail();
+    parts.push(text.slice(runStart, pos));
+    pos += 1;
+    return parts.join('');
+  };
+  const readItems = (close, readItem) => {
+    pos += 1; skipSpace();
+    while (text[pos] !== close) {
+      if (pos >= text.length) fail();
+      readItem(); skipSpace();
+      if (text[pos] === ',') { pos += 1; skipSpace(); } else if (text[pos] !== close) fail();
+    }
+    pos += 1;
+  };
+  const readValue = () => {
+    skipSpace();
+    const char = text[pos];
+    if (char === '{') { const dict = {}; readItems('}', () => { const key = readValue(); skipSpace(); if (text[pos] !== ':') fail(); pos += 1; dict[key] = readValue(); }); return dict; }
+    if (char === '[' || char === '(') { const list = []; readItems(char === '[' ? ']' : ')', () => list.push(readValue())); return list; }
+    if (char === "'" || char === '"') return readString();
+    WORD.lastIndex = pos;
+    const match = WORD.exec(text);
+    if (!match) fail();
+    pos = WORD.lastIndex;
+    return match[0] in KEYWORDS ? KEYWORDS[match[0]] : Number(match[0]);
+  };
+  try {
+    const value = readValue(); skipSpace();
+    return pos === text.length ? value : undefined;
+  } catch { return undefined; }
+}
 const sortKeys = (value) => (Array.isArray(value) ? value.map(sortKeys) : _.isPlainObject(value) ? _.fromPairs(_.sortBy(_.toPairs(value), ([key]) => key).map(([key, item]) => [key, sortKeys(item)])) : value);
 function toolLanes(turn) {
   if (turn._toolLanes) return turn._toolLanes;
@@ -469,6 +524,13 @@ function toolLanes(turn) {
   return lanes;
 }
 
+// The top agent's row sits under Query next to Input Guardrails and Miscellaneous, and Input Guardrails
+// often comes first, so the first depth-1 row is not the agent. Lanes and stray spans hang off this row.
+const agentRowOf = (rows) => {
+  const topLevel = rows.filter((row) => row.depth === 1);
+  return _.find(topLevel, (row) => row.type === 'Agent Execution') || _.find(topLevel, (row) => row.kind === 'Agent') || topLevel[0] || rows[0];
+};
+
 // one row = timeline node + matching span record (either may be missing)
 function buildRows(turn) {
   const spanById = _.keyBy(turn.spans, 'id');
@@ -487,7 +549,7 @@ function buildRows(turn) {
     rows.push(rowFrom({ node: { type: 'Query', id: turn.traceId, timeTaken: turn.latency, startTime: turn.traceStartEpochTime }, depth: 0, key: '/query', parentKey: '' }));
     rows.push(rowFrom({ node: { type: 'Agent Execution', id: 'Agent Execution' }, depth: 1, key: '/query/agent', parentKey: '/query' }));
   }
-  const groupKey = turn.timeline ? rows.find((row) => row.depth === 1)?.key || rows[0].key : '/query/agent';
+  const groupKey = turn.timeline ? agentRowOf(rows).key : '/query/agent';
   const extra = turn.spans.filter((span) => !seen.has(span.id)).map((span) => rowFrom({ node: null, span, depth: 2, key: `${groupKey}/x/${span.id}`, parentKey: groupKey, extra: true, inferredTask: lanes.get(span.id) }));
   return { rows, extra };
 }
@@ -569,16 +631,22 @@ function visibleRows() {
   if (!turn) return [];
   const { rows, extra } = buildRows(turn);
   let all = rows;
-  const agentRow = rows.find((row) => row.depth === 1) || rows[0];
+  const agentRow = agentRowOf(rows);
   if (state.groupLanes && agentRow) {
-    // lanes = spans with a task id (sub-agent dispatches); rows with no task keep their place under the agent row
-    const children = rows.filter((row) => row.parentKey === agentRow.key);
+    // lanes = spans with a task id (sub-agent dispatches); rows with no task keep their place under the agent row.
+    // Rows are in tree order, so the agent's subtree is one contiguous run and a child's descendants follow it.
+    const agentIndex = _.indexOf(rows, agentRow);
+    const underAgent = (row) => row.key.startsWith(`${agentRow.key}/`);
+    const subtreeEnd = _.findIndex(rows, (row) => !underAgent(row), agentIndex + 1);
+    const agentSubtree = rows.slice(agentIndex + 1, subtreeEnd === -1 ? rows.length : subtreeEnd);
+    const descendantsOf = (child) => agentSubtree.filter((row) => row.key.startsWith(`${child.key}/`));
+    const children = agentSubtree.filter((row) => row.parentKey === agentRow.key);
     const grouped = _.groupBy(children, (row) => row.task || '');
     const regrouped = [];
     const emitted = new Set();
     children.forEach((row) => {
       const lane = row.task || '';
-      if (!lane) { regrouped.push(row); return; }
+      if (!lane) { regrouped.push(row, ...descendantsOf(row)); return; }
       if (emitted.has(lane)) return;
       emitted.add(lane);
       const laneRows = grouped[lane];
@@ -586,10 +654,10 @@ function visibleRows() {
       const laneStart = _.min(laneRows.map((laneRow) => laneRow.start).filter(_.isFinite));
       const laneEnd = _.max(laneRows.map((laneRow) => laneRow.end).filter(_.isFinite));
       regrouped.push({ key: laneKey, parentKey: agentRow.key, depth: 2, node: null, span: null, isLane: true, id: lane, type: 'Lane', kind: 'Agent', name: lane, start: laneStart, end: laneEnd, timeTaken: laneEnd - laneStart, tokens: { up: _.sumBy(laneRows, (laneRow) => laneRow.tokens.up || 0), down: _.sumBy(laneRows, (laneRow) => laneRow.tokens.down || 0) }, cost: _.sumBy(laneRows, (laneRow) => laneRow.cost || 0), status: '', hasChildren: true, count: laneRows.length });
-      laneRows.forEach((laneRow) => regrouped.push({ ...laneRow, parentKey: laneKey, depth: 3 }));
+      laneRows.forEach((laneRow) => regrouped.push({ ...laneRow, parentKey: laneKey, depth: laneRow.depth + 1 }, ...descendantsOf(laneRow).map((row) => ({ ...row, depth: row.depth + 1 }))));
     });
-    const head = rows.filter((row) => row.depth <= 1);
-    all = [...head, ...regrouped];
+    // rows outside the agent subtree (guardrails, miscellaneous) keep their place and their own children
+    all = [...rows.slice(0, agentIndex + 1), ...regrouped, ...rows.slice(agentIndex + 1 + agentSubtree.length)];
   }
   if (state.showExtra && extra.length) {
     const extraKey = `${agentRow ? agentRow.key : ''}/extra`;
