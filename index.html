@@ -406,8 +406,8 @@ kbd{font-family:var(--mono);font-size:11px;border:1px solid var(--line);border-b
       <div class="bar-track" id="barTrack" aria-hidden="true"><i></i></div>
       <div class="progress" id="progress" aria-live="polite"></div>
       <div class="formats">
-        <span class="fmt"><code>.json</code> from <code>to_json.py</code></span>
-        <span class="fmt"><code>.jsonl</code> raw export, <code>case-traces-&lt;caseId&gt;-&lt;runId&gt;</code></span>
+        <span class="fmt"><code>.json</code> export, <code>&lt;agent&gt;-&lt;caseId&gt;</code></span>
+        <span class="fmt">older <code>.jsonl</code> exports and <code>to_json.py</code> output</span>
       </div>
       <div class="gets">
         <div class="g"><b>Turns and timeline</b><span>One card per user message, the span tree with duration bars, grouped by sub-agent lane.</span></div>
@@ -558,8 +558,28 @@ function parseJsonl(text) {
   }
   return caseLayout(records);
 }
+// The automation's .json names things the way the observability page does: session, traces, steps.
+// The rest of the viewer reads the older turns/spans shape, so map it back here.
+function sessionLayout(parsed) {
+  const turns = parsed.traces.map((trace) => ({
+    ..._.omit(trace, ['id', 'query', 'start', 'tokens', 'cached', 'cost', 'steps']),
+    traceId: trace.id,
+    message: trace.query,
+    traceStartEpochTime: trace.start,
+    tokens: _.get(trace, 'tokens.total'),
+    inputTokens: _.get(trace, 'tokens.input'),
+    outputTokens: _.get(trace, 'tokens.output'),
+    cacheReadTokens: _.get(trace, 'cached.read'),
+    cacheWriteTokens: _.get(trace, 'cached.write'),
+    tokenCost: trace.cost,
+    timeline: trace.timeline || null,
+    spans: trace.steps || [],
+  }));
+  return { caseId: _.get(parsed, 'session.id', ''), turns, otherSpans: parsed.unmatchedSteps || [], messages: parsed.conversation || [] };
+}
 function normaliseLayout(parsed) {
-  if (!_.isPlainObject(parsed) || !Array.isArray(parsed.turns)) throw new Error('not a case export: expected {caseId, turns[], messages[]}');
+  if (_.isPlainObject(parsed) && Array.isArray(parsed.traces)) return sessionLayout(parsed);
+  if (!_.isPlainObject(parsed) || !Array.isArray(parsed.turns)) throw new Error('not a case export: expected {session, traces[], conversation[]}');
   return { caseId: parsed.caseId || '', turns: parsed.turns.map((turn) => ({ ...turn, spans: turn.spans || [], timeline: turn.timeline || null })), otherSpans: parsed.otherSpans || [], messages: parsed.messages || [] };
 }
 

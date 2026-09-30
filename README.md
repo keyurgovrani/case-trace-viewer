@@ -7,7 +7,7 @@ Hosted at https://keyurgovrani.github.io/case-trace-viewer/
 ## Use
 
 1. Open the page.
-2. Pick the `.json` written by `to_json.py`, or the raw `case-traces-<caseId>-<runId>.jsonl` the Export Case Traces automation produced.
+2. Pick the `<agent>-<caseId>.json` the Export Case Traces automation produced. Older `.jsonl` exports and `to_json.py` output open too.
 
 The file is parsed in the browser. Nothing is uploaded.
 
@@ -26,13 +26,15 @@ The file is parsed in the browser. Nothing is uploaded.
 - **Opening files**: `Open another file` goes straight to the file picker, and the open case stays on screen until the new one parses. A file can be dropped anywhere on the window.
 - **Conversation**: user and agent messages, dispatches to sub-agents, sub-agent results, platform context rows and thoughts, rendered as markdown with lane and kind filters. `Open in trace` on a message jumps to its turn, or to its lane for sub-agent traffic.
 
-## Convert an export
+## Convert an older export
+
+Exports made before 2026-09-30 are JSON Lines. To read one outside the viewer:
 
 ```sh
 python3 to_json.py case-traces-<caseId>-<runId>.jsonl
 ```
 
-Writes a pretty-printed `.json` next to the input. The viewer opens either file.
+Writes a pretty-printed `.json` next to the input.
 
 ## Run locally
 
